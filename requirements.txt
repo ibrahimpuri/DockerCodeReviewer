@@ -1,0 +1,15 @@
+streamlit        # For the Streamlit GUI
+fastapi          # For the FastAPI backend
+uvicorn      # ASGI server for FastAPI
+python-dotenv     # For secure environment variable management
+
+torch             # PyTorch with MPS support
+transformers      # Hugging Face Transformers (CodeBERT)
+anthropic         # Anthropic Claude API client
+openai           # OpenAI GPT API client
+
+pylint           # Python linter
+
+# Optional dependencies for improved performance or development
+numpy         # For numerical computations
+pandas          # For data handling (optional)
