@@ -1,8 +1,9 @@
 import os
 import subprocess
+import tempfile
 import torch
-from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification, logging
-import openai
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, logging
+from openai import OpenAI
 import anthropic
 from dotenv import load_dotenv
 
@@ -19,9 +20,9 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 
-# Initialize APIs
-openai.api_key = OPENAI_API_KEY
-claude_client = anthropic.Client(api_key=CLAUDE_API_KEY)
+# Initialize API clients
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+claude_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
 # Check for MPS (Metal Performance Shaders) support
 USE_MPS = torch.backends.mps.is_available()
@@ -33,62 +34,70 @@ model_name = "microsoft/codebert-base"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 model = AutoModelForSequenceClassification.from_pretrained(model_name).to(device)
 
+SUPPORTED_LANGUAGES = {"python", "javascript"}
+
+
 def gpt4_generate_feedback(code: str) -> str:
     """Generate contextual feedback using GPT-4."""
     try:
-        response = openai.ChatCompletion.create(
+        response = openai_client.chat.completions.create(
             model="gpt-4",
             messages=[
                 {"role": "system", "content": "You are an expert code reviewer. Provide actionable feedback."},
                 {"role": "user", "content": code},
             ],
         )
-        return response["choices"][0]["message"]["content"]
+        return response.choices[0].message.content
     except Exception as e:
         return f"GPT-4 Error: {e}"
+
 
 def claude_generate_feedback(code: str) -> str:
     """Generate contextual feedback using Claude."""
     try:
-        response = claude_client.chat(
-            model="claude-2",
+        response = claude_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1000,
+            system="You are an expert code reviewer. Provide actionable feedback.",
             messages=[
-                {"role": "system", "content": "You are an expert code reviewer. Provide actionable feedback."},
                 {"role": "user", "content": code},
             ],
-            max_tokens_to_sample=1000,
         )
-        return response["completion"]
+        return response.content[0].text
     except Exception as e:
         return f"Claude Error: {e}"
 
+
 def run_linter(file_content: str, language: str) -> list:
     """Run the appropriate linter and return issues."""
-    temp_path = "temp_code_file.py" if language == "python" else "temp_code_file.js"
-    with open(temp_path, "w") as f:
-        f.write(file_content)
+    suffix = ".py" if language == "python" else ".js"
     issues = []
-    if language == "python":
-        result = subprocess.run(["pylint", temp_path], capture_output=True, text=True)
-        issues = result.stdout.splitlines()
-    elif language == "javascript":
-        result = subprocess.run(["eslint", temp_path], capture_output=True, text=True)
-        issues = result.stdout.splitlines()
-    os.remove(temp_path)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False) as tmp:
+        tmp.write(file_content)
+        temp_path = tmp.name
+    try:
+        if language == "python":
+            result = subprocess.run(["pylint", temp_path], capture_output=True, text=True)
+            issues = result.stdout.splitlines()
+        elif language == "javascript":
+            result = subprocess.run(["eslint", temp_path], capture_output=True, text=True)
+            issues = result.stdout.splitlines()
+    finally:
+        os.remove(temp_path)
     return issues
 
-def split_into_chunks(text, max_length=512):
-    """Splits long input into smaller chunks for processing."""
-    tokenized = tokenizer(text, return_tensors="pt", truncation=False)["input_ids"]
-    return [tokenized[0][i:i + max_length] for i in range(0, len(tokenized[0]), max_length)]
 
 def analyze_code(file_content: str, language: str, ai_tool: str = "gpt") -> dict:
     """Analyze code for defects, generate feedback, and return results."""
+    if language not in SUPPORTED_LANGUAGES:
+        raise ValueError(f"Unsupported language '{language}'. Supported: {sorted(SUPPORTED_LANGUAGES)}")
+
     tokenized = tokenizer(file_content, truncation=False)
     token_count = len(tokenized["input_ids"])
 
     # Warn and truncate if the input exceeds the model's maximum length
-    if token_count > 512:
+    truncated = token_count > 512
+    if truncated:
         print(f"Warning: Input tokens exceed model's maximum length ({token_count} > 512). Truncating.")
     inputs = tokenizer(file_content, return_tensors="pt", truncation=True, max_length=512).to(device)
 
@@ -101,16 +110,21 @@ def analyze_code(file_content: str, language: str, ai_tool: str = "gpt") -> dict
     is_defective = prediction == 1
 
     # AI-generated feedback
-    feedback = gpt4_generate_feedback(file_content) if ai_tool == "gpt" else claude_generate_feedback(file_content)
+    if ai_tool in ("gpt", "gpt-4"):
+        feedback = gpt4_generate_feedback(file_content)
+    else:
+        feedback = claude_generate_feedback(file_content)
 
     # Run linting
     lint_issues = run_linter(file_content, language)
 
     return {
         "is_defective": is_defective,
+        "truncated": truncated,
         "feedback": feedback,
         "lint_issues": lint_issues,
     }
+
 
 # Example usage
 if __name__ == "__main__":
@@ -123,5 +137,7 @@ if __name__ == "__main__":
 
     print("Results")
     print(f"Is Defective: {'Yes' if results['is_defective'] else 'No'}")
+    if results["truncated"]:
+        print("Note: Input was truncated to fit model limits.")
     print("\nAI Feedback:\n", results["feedback"])
     print("\nLinter Issues:\n", "\n".join(results["lint_issues"]))
