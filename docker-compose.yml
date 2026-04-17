@@ -1,14 +1,5 @@
 version: "3.8"
 services:
-  streamlit:
-    build:
-      context: .
-      dockerfile: Dockerfile_streamlit
-    ports:
-      - "8501:8501"
-    env_file:
-      - .env
-
   fastapi:
     build:
       context: .
@@ -17,3 +8,31 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile_streamlit
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3

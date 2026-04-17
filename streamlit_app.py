@@ -1,5 +1,12 @@
+import html
+import json
+import logging
+import os
+
 import streamlit as st
 from ai_code_reviewer_backend import analyze_code
+
+logger = logging.getLogger(__name__)
 
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -334,6 +341,11 @@ hr { border-color: rgba(99, 102, 241, 0.12) !important; }
 </style>
 """, unsafe_allow_html=True)
 
+# ── Session state ──────────────────────────────────────────────────────────────
+if "analysis_results" not in st.session_state:
+    st.session_state.analysis_results = None
+if "analysis_meta" not in st.session_state:
+    st.session_state.analysis_meta = {}
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -360,6 +372,20 @@ with st.sidebar:
         "Language",
         options=["python", "javascript"],
         label_visibility="collapsed",
+    )
+
+    st.markdown('<div class="sidebar-section-label">API Key Status</div>', unsafe_allow_html=True)
+    openai_ok = bool(os.getenv("OPENAI_API_KEY"))
+    claude_ok = bool(os.getenv("CLAUDE_API_KEY"))
+    st.markdown(
+        f'<div style="font-size:0.8rem; color:{"#34d399" if openai_ok else "#f87171"}; margin-bottom:4px;">'
+        f'{"✓" if openai_ok else "✗"} OpenAI key {"configured" if openai_ok else "missing"}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div style="font-size:0.8rem; color:{"#34d399" if claude_ok else "#f87171"};">'
+        f'{"✓" if claude_ok else "✗"} Anthropic key {"configured" if claude_ok else "missing"}</div>',
+        unsafe_allow_html=True,
     )
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -404,11 +430,49 @@ with col_upload:
     )
 
 if uploaded_file:
-    file_content = uploaded_file.read().decode("utf-8")
+    # Clear stale results when a new file is uploaded
+    if st.session_state.analysis_meta.get("file_name") != uploaded_file.name:
+        st.session_state.analysis_results = None
+        st.session_state.analysis_meta = {}
+
+    # Decode with explicit error handling
+    try:
+        file_content = uploaded_file.read().decode("utf-8")
+    except UnicodeDecodeError:
+        st.error(
+            "This file could not be read as UTF-8 text. "
+            "Only plain-text source files (.py, .js) are supported."
+        )
+        st.stop()
+
+    # Empty-file guard
+    if not file_content.strip():
+        st.warning("The uploaded file is empty. Please upload a file with code content.")
+        st.stop()
+
     line_count = file_content.count("\n") + 1
     char_count = len(file_content)
 
-    # Code preview card
+    # Soft size warning (> 1 MB)
+    if len(file_content.encode("utf-8")) > 1_000_000:
+        st.warning(
+            f"This file is larger than 1 MB ({char_count:,} characters). "
+            "Analysis may be slow or produce incomplete results."
+        )
+
+    # Language / file extension mismatch warning
+    ext_map = {"py": "python", "js": "javascript"}
+    file_ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
+    expected_language = ext_map.get(file_ext)
+    if expected_language and expected_language != language:
+        st.warning(
+            f"File extension `.{file_ext}` suggests **{expected_language}**, "
+            f"but the sidebar has **{language}** selected. "
+            "Analysis will use the sidebar setting — update it if needed."
+        )
+
+    # Code preview card — filename is escaped to prevent XSS
+    safe_name = html.escape(uploaded_file.name)
     st.markdown(f"""
     <div class="code-card">
         <div class="code-card-header">
@@ -417,7 +481,7 @@ if uploaded_file:
                 <div class="dot dot-yellow"></div>
                 <div class="dot dot-green"></div>
             </div>
-            <div class="code-card-title">{uploaded_file.name}</div>
+            <div class="code-card-title">{safe_name}</div>
             <div style="font-size:0.7rem; color:#334155;">{line_count} lines · {char_count:,} chars</div>
         </div>
     </div>
@@ -426,22 +490,50 @@ if uploaded_file:
     st.code(file_content, language=language)
 
     if st.button("🔍  Analyse Code", use_container_width=True):
-        with st.spinner("Running analysis…"):
+        with st.spinner(
+            "Step 1/3 — Defect detection  ·  Step 2/3 — AI feedback  ·  Step 3/3 — Linting…"
+        ):
             try:
-                results = analyze_code(file_content, language, ai_tool.lower())
-            except Exception as e:
-                st.error(f"Analysis failed: {e}")
+                st.session_state.analysis_results = analyze_code(
+                    file_content, language, ai_tool.lower()
+                )
+                st.session_state.analysis_meta = {
+                    "file_name": uploaded_file.name,
+                    "line_count": line_count,
+                    "char_count": char_count,
+                    "language": language,
+                    "ai_tool": ai_tool,
+                }
+            except ValueError as e:
+                st.error(f"Input error: {e}")
+                st.stop()
+            except RuntimeError:
+                st.error(
+                    "The AI model is not available. "
+                    "Check that CodeBERT loaded correctly on startup."
+                )
+                st.stop()
+            except Exception:
+                logger.exception("Analysis failed for %s", uploaded_file.name)
+                st.error(
+                    "Analysis failed due to an unexpected error. "
+                    "Verify your API keys are set and network access is available."
+                )
                 st.stop()
 
-        # ── Summary cards ──────────────────────────────────────────────────────
-        is_defective = results["is_defective"]
-        lint_issues  = results["lint_issues"]
+    # ── Results (rendered from session state so they survive sidebar changes) ──
+    if st.session_state.analysis_results is not None:
+        results     = st.session_state.analysis_results
+        is_defective = results.get("is_defective", False)
+        lint_issues  = results.get("lint_issues", [])
         truncated    = results.get("truncated", False)
+        meta_lines   = st.session_state.analysis_meta.get("line_count", line_count)
+        meta_tool    = st.session_state.analysis_meta.get("ai_tool", ai_tool)
 
         status_class = "status-defective" if is_defective else "status-clean"
         card_class   = "card-defective"   if is_defective else "card-clean"
         status_icon  = "⚠️" if is_defective else "✅"
-        status_text  = "Defects Found" if is_defective else "Looks Clean"
+        status_text  = "Defects Found"    if is_defective else "Looks Clean"
 
         st.markdown(f"""
         <div class="result-grid">
@@ -457,12 +549,12 @@ if uploaded_file:
             </div>
             <div class="result-card">
                 <div class="result-card-label">AI Engine</div>
-                <div class="result-card-value" style="font-size:1.1rem;">{ai_tool}</div>
+                <div class="result-card-value" style="font-size:1.1rem;">{html.escape(meta_tool)}</div>
                 <div class="result-card-sub">used for feedback</div>
             </div>
             <div class="result-card">
                 <div class="result-card-label">Lines Reviewed</div>
-                <div class="result-card-value">{line_count:,}</div>
+                <div class="result-card-value">{meta_lines:,}</div>
                 <div class="result-card-sub">{"⚠ truncated for model" if truncated else "full file analysed"}</div>
             </div>
         </div>
@@ -479,9 +571,35 @@ if uploaded_file:
 
         # ── AI Feedback ────────────────────────────────────────────────────────
         st.markdown('<div class="section-heading">AI Feedback</div>', unsafe_allow_html=True)
+        # html.escape() prevents AI-generated HTML/JS from executing in the browser
+        safe_feedback = html.escape(results.get("feedback", ""))
         st.markdown(
-            f'<div class="feedback-box">{results["feedback"]}</div>',
+            f'<div class="feedback-box">{safe_feedback}</div>',
             unsafe_allow_html=True,
+        )
+
+        # Copy button: st.code always renders a native clipboard icon
+        with st.expander("Copy raw feedback text"):
+            st.code(results.get("feedback", ""), language=None)
+
+        # Download results as JSON
+        download_payload = json.dumps(
+            {
+                "file": st.session_state.analysis_meta.get("file_name"),
+                "language": st.session_state.analysis_meta.get("language"),
+                "ai_tool": st.session_state.analysis_meta.get("ai_tool"),
+                "is_defective": is_defective,
+                "truncated": truncated,
+                "feedback": results.get("feedback", ""),
+                "lint_issues": lint_issues,
+            },
+            indent=2,
+        )
+        st.download_button(
+            label="⬇ Download results as JSON",
+            data=download_payload,
+            file_name="codelens_results.json",
+            mime="application/json",
         )
 
         # ── Linter Output ──────────────────────────────────────────────────────
@@ -489,8 +607,10 @@ if uploaded_file:
         if lint_issues:
             for issue in lint_issues:
                 if issue.strip():
+                    # html.escape() prevents linter output (which echoes user code) from injecting HTML
                     st.markdown(
-                        f'<div class="lint-row"><span class="lint-icon">›</span>{issue}</div>',
+                        f'<div class="lint-row"><span class="lint-icon">›</span>'
+                        f'{html.escape(issue)}</div>',
                         unsafe_allow_html=True,
                     )
         else:

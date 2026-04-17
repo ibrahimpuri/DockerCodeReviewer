@@ -1,12 +1,16 @@
-streamlit        # For the Streamlit GUI
-fastapi          # For the FastAPI backend
-uvicorn          # ASGI server for FastAPI
-python-dotenv    # For secure environment variable management
-python-multipart # Required by FastAPI for file uploads
+streamlit==1.35.0
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-dotenv==1.0.1
+python-multipart==0.0.9
 
-torch            # PyTorch for model inference
-transformers     # Hugging Face Transformers (CodeBERT)
-anthropic        # Anthropic Claude API client
-openai           # OpenAI GPT API client
+torch==2.3.0
+transformers==4.41.2
+anthropic==0.28.0
+openai==1.30.0
 
-pylint           # Python linter
+pylint==3.2.2
+
+# ESLint (for JavaScript linting) must be installed separately via npm:
+#   npm install -g eslint
+# This is handled automatically in the Docker images (see Dockerfile_fastapi / Dockerfile_streamlit).
