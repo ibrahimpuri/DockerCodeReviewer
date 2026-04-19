@@ -98,25 +98,28 @@ def fine_tune(model, tokenizer, device: torch.device) -> dict:
             pass
 
     model.train()
-
     final_loss = 0.0
-    for epoch in range(1, EPOCHS + 1):
-        epoch_loss = 0.0
-        for batch in dataloader:
-            batch = {k: v.to(device) for k, v in batch.items()}
-            optimizer.zero_grad()
-            outputs = model(**batch)
-            loss    = outputs.loss
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
-            optimizer.step()
-            epoch_loss += loss.item()
 
-        avg = epoch_loss / max(len(dataloader), 1)
-        final_loss = avg
-        logger.info("Epoch %d/%d — avg loss: %.4f", epoch, EPOCHS, avg)
+    try:
+        for epoch in range(1, EPOCHS + 1):
+            epoch_loss = 0.0
+            for batch in dataloader:
+                batch = {k: v.to(device) for k, v in batch.items()}
+                optimizer.zero_grad()
+                outputs = model(**batch)
+                loss    = outputs.loss
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+                optimizer.step()
+                epoch_loss += loss.item()
 
-    model.eval()
+            avg = epoch_loss / max(len(dataloader), 1)
+            final_loss = avg
+            logger.info("Epoch %d/%d — avg loss: %.4f", epoch, EPOCHS, avg)
+    finally:
+        # Always restore eval mode — even if an exception (e.g. CUDA OOM) interrupts
+        # training mid-loop, so the caller's model object is never left in train mode.
+        model.eval()
 
     os.makedirs(MODEL_WEIGHTS_DIR, exist_ok=True)
     model.save_pretrained(MODEL_WEIGHTS_DIR)

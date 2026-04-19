@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import logging
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
@@ -147,6 +148,8 @@ async def retrain():
     Runs in a thread-pool executor so the event loop is not blocked.
     _retrain_lock prevents two simultaneous calls from racing.
     """
+    # asyncio is single-threaded; no await between this check and lock acquisition,
+    # so the locked() check and async with are effectively atomic.
     if _retrain_lock.locked():
         raise HTTPException(
             status_code=409,
@@ -156,9 +159,14 @@ async def retrain():
     async with _retrain_lock:
         loop = asyncio.get_event_loop()
 
+        # Deep-copy the model so the live inference model is never mutated
+        # during training. fine_tune() trains and saves the copy; reload_model()
+        # then loads the saved weights back into _backend.model.
+        model_copy = copy.deepcopy(_backend.model)
+
         def _run():
             result = fine_tune(
-                model=_backend.model,
+                model=model_copy,
                 tokenizer=_backend.tokenizer,
                 device=_backend.device,
             )

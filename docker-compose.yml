@@ -51,6 +51,7 @@ services:
     environment:
       - DB_PATH=/app/data/codelens.db
       - MODEL_WEIGHTS_DIR=/app/data/model_weights
+      - FASTAPI_URL=http://fastapi:8000
     volumes:
       - codelens_data:/app/data
     restart: unless-stopped

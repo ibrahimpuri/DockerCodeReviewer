@@ -5,8 +5,13 @@ import os
 
 import requests
 import streamlit as st
-from ai_code_reviewer_backend import analyze_code
+from ai_code_reviewer_backend import analyze_code, reload_model
 from database import get_stats, save_training_sample
+
+# In Docker Compose, Streamlit and FastAPI run in separate containers.
+# FASTAPI_URL must be the service name (fastapi), not localhost.
+# Override to http://localhost:8000 when running outside Docker.
+FASTAPI_URL = os.getenv("FASTAPI_URL", "http://fastapi:8000")
 
 logger = logging.getLogger(__name__)
 
@@ -433,9 +438,12 @@ with st.sidebar:
     if st.button("🔁  Retrain Model", use_container_width=True):
         with st.spinner("Fine-tuning in progress…"):
             try:
-                resp = requests.post("http://localhost:8000/retrain", timeout=600)
+                resp = requests.post(f"{FASTAPI_URL}/retrain", timeout=600)
                 if resp.status_code == 200:
                     train_stats = resp.json().get("training_stats", {})
+                    # Reload in this process too — FastAPI and Streamlit each
+                    # hold their own model instance loaded from MODEL_WEIGHTS_DIR.
+                    reload_model()
                     st.success(
                         f"Retrained on {train_stats.get('samples', '?')} samples. "
                         f"Final loss: {train_stats.get('final_loss', '?')}"
@@ -447,7 +455,7 @@ with st.sidebar:
                 else:
                     st.error(f"Retrain failed (HTTP {resp.status_code}).")
             except requests.exceptions.ConnectionError:
-                st.error("Cannot reach FastAPI backend at localhost:8000.")
+                st.error(f"Cannot reach FastAPI backend at {FASTAPI_URL}.")
             except Exception as exc:
                 st.error(f"Retrain error: {exc}")
 
