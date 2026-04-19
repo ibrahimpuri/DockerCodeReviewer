@@ -1,4 +1,9 @@
-FROM python:3.12-slim
+# pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime includes:
+#   - CUDA 12.6 runtime (supports RTX 5070 / Blackwell SM_100)
+#   - cuDNN 9
+#   - PyTorch 2.6.0 pre-installed
+#   - Python 3.11
+FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime
 
 # Install Node.js + ESLint — required by the JavaScript linter in the backend
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -9,10 +14,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt /app/
+# torch is already in the base image; install everything else
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY ai_code_reviewer_backend.py /app/
 COPY fastapi_backend.py /app/
+COPY database.py /app/
+COPY trainer.py /app/
+
+# data/ is a named Docker volume — create mount point before switching user
+RUN mkdir -p /app/data
 
 # Run as a non-root user
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
@@ -21,7 +32,7 @@ USER appuser
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
 CMD ["uvicorn", "fastapi_backend:app", "--host", "0.0.0.0", "--port", "8000"]

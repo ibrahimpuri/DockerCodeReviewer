@@ -2,12 +2,15 @@ import logging
 import os
 import subprocess
 import tempfile
+import threading
 
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, logging as hf_logging
 from openai import OpenAI
 import anthropic
 from dotenv import load_dotenv
+
+from database import init_db, save_submission
 
 # Suppress noisy Hugging Face warnings
 hf_logging.set_verbosity_error()
@@ -27,22 +30,66 @@ CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 claude_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
-USE_MPS = torch.backends.mps.is_available()
-device = torch.device("mps") if USE_MPS else torch.device("cpu")
+# Device priority: CUDA (RTX 5070) > MPS (Apple Silicon) > CPU
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+    logger.info("GPU detected: %s", torch.cuda.get_device_name(0))
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
 logger.info("Using device: %s", device)
 
-model_name = "microsoft/codebert-base"
-try:
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name).to(device)
-    logger.info("CodeBERT model loaded successfully.")
-except Exception as exc:
-    logger.critical(
-        "Failed to load CodeBERT model '%s': %s. Defect detection will be unavailable.",
-        model_name, exc,
-    )
-    tokenizer = None
-    model = None
+MODEL_NAME        = "microsoft/unixcoder-base"
+MODEL_WEIGHTS_DIR = os.getenv("MODEL_WEIGHTS_DIR", "./data/model_weights")
+
+# RLock allows the same thread to re-acquire (e.g. reload_model called while lock is held)
+_model_lock = threading.RLock()
+
+
+def _load_model():
+    """
+    Load tokenizer + model. Uses local fine-tuned weights if they exist,
+    otherwise downloads from HuggingFace.
+    Returns (tokenizer, model) or (None, None) on failure.
+    """
+    local_config = os.path.join(MODEL_WEIGHTS_DIR, "config.json")
+    source = MODEL_WEIGHTS_DIR if os.path.isfile(local_config) else MODEL_NAME
+    logger.info("Loading model from: %s", source)
+    try:
+        tok = AutoTokenizer.from_pretrained(source)
+        mdl = AutoModelForSequenceClassification.from_pretrained(
+            source, num_labels=2
+        ).to(device)
+        mdl.eval()
+        logger.info("UniXcoder model loaded successfully.")
+        return tok, mdl
+    except Exception as exc:
+        logger.critical(
+            "Failed to load model from '%s': %s. Defect detection unavailable.",
+            source, exc,
+        )
+        return None, None
+
+
+tokenizer, model = _load_model()
+
+
+def reload_model() -> None:
+    """
+    Hot-swap global model + tokenizer with freshly saved weights.
+    Acquires _model_lock so any in-flight forward pass finishes first.
+    Called by fastapi_backend.py after fine-tuning completes.
+    """
+    global tokenizer, model
+    with _model_lock:
+        logger.info("Reloading model weights...")
+        tokenizer, model = _load_model()
+        logger.info("Model reload complete.")
+
+
+# Initialise DB tables (safe to call multiple times)
+init_db()
 
 SUPPORTED_LANGUAGES = {"python", "javascript"}
 
@@ -108,7 +155,7 @@ def run_linter(file_content: str, language: str) -> list:
 def analyze_code(file_content: str, language: str, ai_tool: str = "gpt") -> dict:
     if tokenizer is None or model is None:
         raise RuntimeError(
-            "CodeBERT model is not loaded. Check network connectivity and model availability."
+            "UniXcoder model is not loaded. Check network connectivity and model availability."
         )
 
     if language not in SUPPORTED_LANGUAGES:
@@ -119,10 +166,9 @@ def analyze_code(file_content: str, language: str, ai_tool: str = "gpt") -> dict
     if not file_content or not file_content.strip():
         raise ValueError("File content is empty. Nothing to analyse.")
 
-    tokenized = tokenizer(file_content, truncation=False)
+    tokenized   = tokenizer(file_content, truncation=False)
     token_count = len(tokenized["input_ids"])
-
-    truncated = token_count > 512
+    truncated   = token_count > 512
     if truncated:
         logger.warning("Input tokens exceed model max (%d > 512). Truncating.", token_count)
 
@@ -130,10 +176,12 @@ def analyze_code(file_content: str, language: str, ai_tool: str = "gpt") -> dict
         file_content, return_tensors="pt", truncation=True, max_length=512
     ).to(device)
 
-    with torch.no_grad():
-        outputs = model(**inputs)
+    # Hold the lock only for the forward pass so the model can be reloaded between requests
+    with _model_lock:
+        with torch.no_grad():
+            outputs = model(**inputs)
 
-    prediction = outputs.logits.argmax(dim=1).item()
+    prediction   = outputs.logits.argmax(dim=1).item()
     is_defective = prediction == 1
 
     if ai_tool in ("gpt", "gpt-4"):
@@ -143,11 +191,19 @@ def analyze_code(file_content: str, language: str, ai_tool: str = "gpt") -> dict
 
     lint_issues = run_linter(file_content, language)
 
+    submission_id = save_submission(
+        code=file_content,
+        language=language,
+        ai_tool=ai_tool,
+        is_defective=is_defective,
+    )
+
     return {
-        "is_defective": is_defective,
-        "truncated": truncated,
-        "feedback": feedback,
-        "lint_issues": lint_issues,
+        "submission_id": submission_id,
+        "is_defective":  is_defective,
+        "truncated":     truncated,
+        "feedback":      feedback,
+        "lint_issues":   lint_issues,
     }
 
 
@@ -157,7 +213,8 @@ def example_function():
     pass
 """
     results = analyze_code(example_code, "python", ai_tool="gpt")
-    print(f"Is Defective: {'Yes' if results['is_defective'] else 'No'}")
+    print(f"Submission ID : {results['submission_id']}")
+    print(f"Is Defective  : {'Yes' if results['is_defective'] else 'No'}")
     if results["truncated"]:
         print("Note: Input was truncated to fit model limits.")
     print("\nAI Feedback:\n", results["feedback"])

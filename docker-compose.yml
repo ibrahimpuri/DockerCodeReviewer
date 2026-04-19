@@ -1,4 +1,9 @@
 version: "3.8"
+
+# Named volume — DB and model weights survive container restarts and rebuilds
+volumes:
+  codelens_data:
+
 services:
   fastapi:
     build:
@@ -8,13 +13,26 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - DB_PATH=/app/data/codelens.db
+      - MODEL_WEIGHTS_DIR=/app/data/model_weights
+    volumes:
+      - codelens_data:/app/data
     restart: unless-stopped
+    # NVIDIA GPU reservation (requires nvidia-container-toolkit on the host)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
-      start_period: 15s
+      start_period: 30s
       retries: 3
 
   streamlit:
@@ -25,7 +43,19 @@ services:
       - "8501:8501"
     env_file:
       - .env
+    environment:
+      - DB_PATH=/app/data/codelens.db
+      - MODEL_WEIGHTS_DIR=/app/data/model_weights
+    volumes:
+      - codelens_data:/app/data
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     depends_on:
       fastapi:
         condition: service_healthy
@@ -34,5 +64,5 @@ services:
              "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
       interval: 30s
       timeout: 10s
-      start_period: 20s
+      start_period: 25s
       retries: 3

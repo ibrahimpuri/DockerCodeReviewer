@@ -3,8 +3,18 @@ fastapi==0.111.0
 uvicorn[standard]==0.29.0
 python-dotenv==1.0.1
 python-multipart==0.0.9
+requests==2.32.3
 
-torch==2.3.0
+# ── PyTorch ────────────────────────────────────────────────────────────────────
+# CPU-only (default for local dev without GPU):
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+#
+# CUDA 12.6 (RTX 5070 / Blackwell SM_100 — requires PyTorch >= 2.6):
+#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu126
+#
+# The Docker GPU images install the cu126 wheel automatically (see Dockerfiles).
+torch==2.6.0
+
 transformers==4.41.2
 anthropic==0.28.0
 openai==1.30.0
@@ -13,4 +23,4 @@ pylint==3.2.2
 
 # ESLint (for JavaScript linting) must be installed separately via npm:
 #   npm install -g eslint
-# This is handled automatically in the Docker images (see Dockerfile_fastapi / Dockerfile_streamlit).
+# This is handled automatically in the Docker images.
