@@ -11,8 +11,6 @@
 #
 # Supported hardware: Intel Arc (Alchemist / Battlemage), Intel Iris Xe,
 # Intel Data Center GPU (Flex / Max series)
-version: "3.8"
-
 services:
   fastapi:
     build:

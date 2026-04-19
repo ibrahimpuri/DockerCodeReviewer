@@ -9,8 +9,6 @@
 #   - Supported on Linux and Windows (via WSL2 + Docker Desktop)
 #
 # Tested with: RTX 5070 (Blackwell SM_100), CUDA 12.6, PyTorch 2.6.0
-version: "3.8"
-
 services:
   fastapi:
     build:

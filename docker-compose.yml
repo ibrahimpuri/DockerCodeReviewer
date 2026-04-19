@@ -1,5 +1,3 @@
-version: "3.8"
-
 # ── Named volume ───────────────────────────────────────────────────────────────
 # DB and model weights survive container restarts and image rebuilds.
 volumes:

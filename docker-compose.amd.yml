@@ -10,8 +10,6 @@
 #
 # Note: PyTorch ROCm builds present as "cuda" — torch.cuda.is_available()
 # returns True on AMD GPUs when using the ROCm wheel.
-version: "3.8"
-
 services:
   fastapi:
     build:
