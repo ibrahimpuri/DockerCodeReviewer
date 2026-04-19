@@ -86,6 +86,17 @@ def fine_tune(model, tokenizer, device: torch.device) -> dict:
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 
     optimizer  = AdamW(model.parameters(), lr=LEARNING_RATE)
+
+    # Apply Intel IPEX optimisation when running on an Intel XPU.
+    # This is a no-op on all other devices and silently skipped if IPEX is not installed.
+    if device.type == "xpu":
+        try:
+            import intel_extension_for_pytorch as ipex  # noqa: F401
+            model, optimizer = ipex.optimize(model, optimizer=optimizer, dtype=torch.float32)
+            logger.info("Intel IPEX optimisation applied.")
+        except ImportError:
+            pass
+
     model.train()
 
     final_loss = 0.0

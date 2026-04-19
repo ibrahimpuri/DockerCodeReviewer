@@ -5,15 +5,27 @@ python-dotenv==1.0.1
 python-multipart==0.0.9
 requests==2.32.3
 
-# ── PyTorch ────────────────────────────────────────────────────────────────────
-# CPU-only (default for local dev without GPU):
-#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+# ── PyTorch — install BEFORE this file based on your hardware ─────────────────
 #
-# CUDA 12.6 (RTX 5070 / Blackwell SM_100 — requires PyTorch >= 2.6):
-#   pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu126
+#  CPU / macOS Intel / Windows (no dedicated GPU):
+#    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
 #
-# The Docker GPU images install the cu126 wheel automatically (see Dockerfiles).
-torch==2.6.0
+#  Apple Silicon (MPS — native Python only, not Docker):
+#    pip install torch==2.6.0            # MPS support is built-in on macOS
+#
+#  NVIDIA GPU (CUDA 12.6 — Linux, Windows WSL2):
+#    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu126
+#
+#  AMD GPU (ROCm 6.2 — Linux):
+#    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/rocm6.2
+#
+#  Intel GPU (Arc / Xe — Linux, Windows):
+#    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+#    pip install intel-extension-for-pytorch
+#
+# Docker: torch is installed automatically by the Dockerfile based on
+# the GPU_BACKEND build arg — you do NOT need to install it manually.
+# ─────────────────────────────────────────────────────────────────────────────
 
 transformers==4.41.2
 anthropic==0.28.0

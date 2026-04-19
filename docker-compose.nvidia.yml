@@ -1,0 +1,37 @@
+# NVIDIA GPU override — layer on top of docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up --build
+#
+# Host requirements:
+#   - NVIDIA driver >= 525
+#   - nvidia-container-toolkit installed and configured
+#     (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+#   - Supported on Linux and Windows (via WSL2 + Docker Desktop)
+#
+# Tested with: RTX 5070 (Blackwell SM_100), CUDA 12.6, PyTorch 2.6.0
+version: "3.8"
+
+services:
+  fastapi:
+    build:
+      args:
+        GPU_BACKEND: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  streamlit:
+    build:
+      args:
+        GPU_BACKEND: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

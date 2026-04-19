@@ -1,14 +1,27 @@
 version: "3.8"
 
-# Named volume — DB and model weights survive container restarts and rebuilds
+# ── Named volume ───────────────────────────────────────────────────────────────
+# DB and model weights survive container restarts and image rebuilds.
 volumes:
   codelens_data:
 
+# ── Base configuration (CPU — works on Linux, macOS, Windows) ─────────────────
+# To enable GPU acceleration, layer one of the override files on top:
+#
+#   NVIDIA:  docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up --build
+#   AMD:     docker compose -f docker-compose.yml -f docker-compose.amd.yml    up --build
+#   Intel:   docker compose -f docker-compose.yml -f docker-compose.intel.yml  up --build
+#
+# Apple Silicon: MPS is not available inside Docker containers.
+#   Run natively for GPU acceleration:  python streamlit_app.py
+#
 services:
   fastapi:
     build:
       context: .
       dockerfile: Dockerfile_fastapi
+      args:
+        GPU_BACKEND: cpu
     ports:
       - "8000:8000"
     env_file:
@@ -19,14 +32,6 @@ services:
     volumes:
       - codelens_data:/app/data
     restart: unless-stopped
-    # NVIDIA GPU reservation (requires nvidia-container-toolkit on the host)
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -39,6 +44,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile_streamlit
+      args:
+        GPU_BACKEND: cpu
     ports:
       - "8501:8501"
     env_file:
@@ -49,13 +56,6 @@ services:
     volumes:
       - codelens_data:/app/data
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     depends_on:
       fastapi:
         condition: service_healthy

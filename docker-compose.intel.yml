@@ -1,0 +1,33 @@
+# Intel GPU override — layer on top of docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.intel.yml up --build
+#
+# Host requirements:
+#   - Intel GPU drivers + compute runtime installed
+#     (https://github.com/intel/compute-runtime)
+#   - Intel oneAPI Base Toolkit (for IPEX/XPU support)
+#   - /dev/dri device present
+#   - Supported on Linux; Windows support via WSL2 is experimental
+#
+# Supported hardware: Intel Arc (Alchemist / Battlemage), Intel Iris Xe,
+# Intel Data Center GPU (Flex / Max series)
+version: "3.8"
+
+services:
+  fastapi:
+    build:
+      args:
+        GPU_BACKEND: intel
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - render
+
+  streamlit:
+    build:
+      args:
+        GPU_BACKEND: intel
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - render

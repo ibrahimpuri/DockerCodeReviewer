@@ -30,15 +30,42 @@ CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 openai_client = OpenAI(api_key=OPENAI_API_KEY)
 claude_client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
-# Device priority: CUDA (RTX 5070) > MPS (Apple Silicon) > CPU
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-    logger.info("GPU detected: %s", torch.cuda.get_device_name(0))
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-else:
-    device = torch.device("cpu")
-logger.info("Using device: %s", device)
+def _detect_device() -> torch.device:
+    """
+    Detect the best available compute device.
+
+    Priority: CUDA (NVIDIA / AMD ROCm) > MPS (Apple Silicon) > XPU (Intel) > CPU
+
+    Notes:
+    - AMD ROCm builds of PyTorch present their device as "cuda", so
+      torch.cuda.is_available() returns True on both NVIDIA and AMD GPUs.
+    - MPS is only available when running natively on macOS; it is never
+      accessible inside a Docker container.
+    - Intel XPU requires intel-extension-for-pytorch to be installed.
+    """
+    if torch.cuda.is_available():
+        name = torch.cuda.get_device_name(0)
+        logger.info("GPU detected: %s (CUDA/ROCm)", name)
+        return torch.device("cuda")
+
+    if torch.backends.mps.is_available():
+        logger.info("GPU detected: Apple Silicon (MPS)")
+        return torch.device("mps")
+
+    try:
+        import intel_extension_for_pytorch as ipex  # noqa: F401
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            name = torch.xpu.get_device_name(0)
+            logger.info("GPU detected: %s (Intel XPU)", name)
+            return torch.device("xpu")
+    except ImportError:
+        pass
+
+    logger.info("No GPU detected — running on CPU")
+    return torch.device("cpu")
+
+
+device = _detect_device()
 
 MODEL_NAME        = "microsoft/unixcoder-base"
 MODEL_WEIGHTS_DIR = os.getenv("MODEL_WEIGHTS_DIR", "./data/model_weights")

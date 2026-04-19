@@ -1,0 +1,36 @@
+# AMD ROCm GPU override — layer on top of docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.amd.yml up --build
+#
+# Host requirements:
+#   - AMD ROCm 6.2+ drivers installed on Linux
+#     (https://rocm.docs.amd.com/en/latest/deploy/linux/index.html)
+#   - /dev/kfd and /dev/dri devices present
+#   - Supported on Linux only (ROCm on Windows WSL2 is experimental)
+#
+# Note: PyTorch ROCm builds present as "cuda" — torch.cuda.is_available()
+# returns True on AMD GPUs when using the ROCm wheel.
+version: "3.8"
+
+services:
+  fastapi:
+    build:
+      args:
+        GPU_BACKEND: rocm
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+
+  streamlit:
+    build:
+      args:
+        GPU_BACKEND: rocm
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
