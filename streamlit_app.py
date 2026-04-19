@@ -3,8 +3,10 @@ import json
 import logging
 import os
 
+import requests
 import streamlit as st
 from ai_code_reviewer_backend import analyze_code
+from database import get_stats, save_training_sample
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +348,22 @@ if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = None
 if "analysis_meta" not in st.session_state:
     st.session_state.analysis_meta = {}
+if "submission_id" not in st.session_state:
+    st.session_state.submission_id = None
+if "feedback_given" not in st.session_state:
+    st.session_state.feedback_given = False
+
+
+def _save_feedback(code: str, language: str, predicted: bool, correct: bool) -> None:
+    """Derive confirmed label and persist as a training sample."""
+    label = int(predicted) if correct else int(not predicted)
+    try:
+        save_training_sample(code=code, language=language, label=label, source="user_feedback")
+        st.session_state.feedback_given = True
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Failed to save feedback: {exc}")
+
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -390,9 +408,53 @@ with st.sidebar:
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("---")
+
+    # ── DB Stats ──────────────────────────────────────────────────────────────
+    st.markdown('<div class="sidebar-section-label">Database Stats</div>', unsafe_allow_html=True)
+    try:
+        db_stats = get_stats()
+        st.markdown(
+            f'<div style="font-size:0.8rem; color:#94a3b8; line-height:1.9;">'
+            f'📊 Submissions: <strong style="color:#e2e8f0">{db_stats["total_submissions"]}</strong><br>'
+            f'🏷️ Training samples: <strong style="color:#e2e8f0">{db_stats["total_training_samples"]}</strong>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        st.markdown(
+            '<div style="font-size:0.75rem; color:#475569;">Stats unavailable</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Retrain button ────────────────────────────────────────────────────────
+    st.markdown('<div class="sidebar-section-label">Model Training</div>', unsafe_allow_html=True)
+    if st.button("🔁  Retrain Model", use_container_width=True):
+        with st.spinner("Fine-tuning in progress…"):
+            try:
+                resp = requests.post("http://localhost:8000/retrain", timeout=600)
+                if resp.status_code == 200:
+                    train_stats = resp.json().get("training_stats", {})
+                    st.success(
+                        f"Retrained on {train_stats.get('samples', '?')} samples. "
+                        f"Final loss: {train_stats.get('final_loss', '?')}"
+                    )
+                elif resp.status_code == 422:
+                    st.warning(resp.json().get("detail", "Not enough training samples yet."))
+                elif resp.status_code == 409:
+                    st.warning("Retraining is already in progress.")
+                else:
+                    st.error(f"Retrain failed (HTTP {resp.status_code}).")
+            except requests.exceptions.ConnectionError:
+                st.error("Cannot reach FastAPI backend at localhost:8000.")
+            except Exception as exc:
+                st.error(f"Retrain error: {exc}")
+
+    st.markdown("---")
     st.markdown("""
     <div style="font-size:0.72rem; color:#334155; line-height:1.6; padding-top:0.5rem;">
-        Powered by <strong style="color:#6366f1">CodeBERT</strong> for defect
+        Powered by <strong style="color:#6366f1">UniXcoder</strong> for defect
         detection and your chosen AI engine for contextual feedback.
         <br><br>
         Supports <strong style="color:#475569">.py</strong> and
@@ -411,7 +473,7 @@ st.markdown("""
         feedback, and linter diagnostics — all in one place.
     </div>
     <div class="stat-row">
-        <div class="stat-pill">⚡ <span>CodeBERT</span> defect model</div>
+        <div class="stat-pill">⚡ <span>UniXcoder</span> defect model</div>
         <div class="stat-pill">🤖 <span>GPT-4</span> · <span>Claude</span></div>
         <div class="stat-pill">🔎 <span>Pylint</span> · <span>ESLint</span></div>
     </div>
@@ -504,13 +566,15 @@ if uploaded_file:
                     "language": language,
                     "ai_tool": ai_tool,
                 }
+                st.session_state.submission_id = st.session_state.analysis_results.get("submission_id")
+                st.session_state.feedback_given = False
             except ValueError as e:
                 st.error(f"Input error: {e}")
                 st.stop()
             except RuntimeError:
                 st.error(
                     "The AI model is not available. "
-                    "Check that CodeBERT loaded correctly on startup."
+                    "Check that UniXcoder loaded correctly on startup."
                 )
                 st.stop()
             except Exception:
@@ -540,7 +604,7 @@ if uploaded_file:
             <div class="result-card {card_class}">
                 <div class="result-card-label">Defect Status</div>
                 <div class="result-card-value {status_class}">{status_icon} {status_text}</div>
-                <div class="result-card-sub">CodeBERT classification</div>
+                <div class="result-card-sub">UniXcoder classification</div>
             </div>
             <div class="result-card">
                 <div class="result-card-label">Linter Issues</div>
@@ -618,6 +682,38 @@ if uploaded_file:
                 '<div class="no-issues">✓ No linting issues detected.</div>',
                 unsafe_allow_html=True,
             )
+
+        # ── Prediction Feedback ────────────────────────────────────────────────
+        st.markdown('<div class="section-heading">Prediction Feedback</div>', unsafe_allow_html=True)
+        if st.session_state.feedback_given:
+            st.markdown(
+                '<div style="font-size:0.875rem; color:#34d399; padding:0.75rem 0;">'
+                '✓ Thank you — your feedback has been saved as a training sample.</div>',
+                unsafe_allow_html=True,
+            )
+        elif st.session_state.submission_id is not None:
+            st.markdown(
+                '<div style="font-size:0.8rem; color:#64748b; margin-bottom:0.6rem;">'
+                'Was the defect prediction accurate? Your answer improves the model.</div>',
+                unsafe_allow_html=True,
+            )
+            fb_col1, fb_col2 = st.columns(2)
+            with fb_col1:
+                if st.button("👍  Prediction was correct", use_container_width=True):
+                    _save_feedback(
+                        code=file_content,
+                        language=st.session_state.analysis_meta.get("language", language),
+                        predicted=bool(results.get("is_defective", False)),
+                        correct=True,
+                    )
+            with fb_col2:
+                if st.button("👎  Prediction was wrong", use_container_width=True):
+                    _save_feedback(
+                        code=file_content,
+                        language=st.session_state.analysis_meta.get("language", language),
+                        predicted=bool(results.get("is_defective", False)),
+                        correct=False,
+                    )
 
 else:
     # Empty state

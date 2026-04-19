@@ -3,8 +3,30 @@ fastapi==0.111.0
 uvicorn[standard]==0.29.0
 python-dotenv==1.0.1
 python-multipart==0.0.9
+requests==2.32.3
 
-torch==2.3.0
+# ── PyTorch — install BEFORE this file based on your hardware ─────────────────
+#
+#  CPU / macOS Intel / Windows (no dedicated GPU):
+#    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+#
+#  Apple Silicon (MPS — native Python only, not Docker):
+#    pip install torch==2.6.0            # MPS support is built-in on macOS
+#
+#  NVIDIA GPU (CUDA 12.6 — Linux, Windows WSL2):
+#    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu126
+#
+#  AMD GPU (ROCm 6.2 — Linux):
+#    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/rocm6.2
+#
+#  Intel GPU (Arc / Xe — Linux, Windows):
+#    pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+#    pip install intel-extension-for-pytorch
+#
+# Docker: torch is installed automatically by the Dockerfile based on
+# the GPU_BACKEND build arg — you do NOT need to install it manually.
+# ─────────────────────────────────────────────────────────────────────────────
+
 transformers==4.41.2
 anthropic==0.28.0
 openai==1.30.0
@@ -13,4 +35,4 @@ pylint==3.2.2
 
 # ESLint (for JavaScript linting) must be installed separately via npm:
 #   npm install -g eslint
-# This is handled automatically in the Docker images (see Dockerfile_fastapi / Dockerfile_streamlit).
+# This is handled automatically in the Docker images.

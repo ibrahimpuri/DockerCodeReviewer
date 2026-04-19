@@ -1,27 +1,68 @@
-FROM python:3.12-slim
+# ── GPU backend selection ──────────────────────────────────────────────────────
+# Build with:
+#   --build-arg GPU_BACKEND=cpu     (default — works on all platforms)
+#   --build-arg GPU_BACKEND=cuda    (NVIDIA, requires nvidia-container-toolkit)
+#   --build-arg GPU_BACKEND=rocm    (AMD, requires ROCm drivers on Linux)
+#   --build-arg GPU_BACKEND=intel   (Intel Arc/Xe, requires oneAPI on Linux)
+ARG GPU_BACKEND=cpu
 
-# Install Node.js + ESLint — required by the JavaScript linter in the backend
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        nodejs npm \
+# ── Base images ────────────────────────────────────────────────────────────────
+# CUDA: PyTorch + CUDA 12.6 pre-installed (NVIDIA RTX 5070 / Blackwell SM_100)
+FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-runtime AS base-cuda
+# All other backends start from a minimal Debian/Python image (multi-arch: amd64 + arm64)
+FROM python:3.12-slim AS base-cpu
+FROM python:3.12-slim AS base-rocm
+FROM python:3.12-slim AS base-intel
+
+# ── Runtime stage ──────────────────────────────────────────────────────────────
+FROM base-${GPU_BACKEND} AS final
+ARG GPU_BACKEND=cpu
+
+# Node.js LTS + ESLint (required for JavaScript linting in the backend)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_lts.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && npm install -g eslint \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
+# Install the correct PyTorch wheel for the selected GPU backend.
+# CUDA: torch is already in the base image — skip reinstall.
+# ROCm: AMD GPU support via the ROCm 6.2 wheel index.
+# Intel: CPU torch + Intel Extension for PyTorch (XPU device).
+# CPU: plain CPU wheel, works on Linux/macOS/Windows and Apple Silicon.
+RUN if   [ "$GPU_BACKEND" = "rocm" ];  then \
+        pip install --no-cache-dir torch==2.6.0 \
+            --index-url https://download.pytorch.org/whl/rocm6.2; \
+    elif [ "$GPU_BACKEND" = "intel" ]; then \
+        pip install --no-cache-dir torch==2.6.0 \
+            --index-url https://download.pytorch.org/whl/cpu \
+        && pip install --no-cache-dir intel-extension-for-pytorch; \
+    elif [ "$GPU_BACKEND" = "cpu" ];   then \
+        pip install --no-cache-dir torch==2.6.0 \
+            --index-url https://download.pytorch.org/whl/cpu; \
+    fi
+# (cuda case: torch already present in the base image)
+
 COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ai_code_reviewer_backend.py /app/
-COPY fastapi_backend.py /app/
+COPY ai_code_reviewer_backend.py fastapi_backend.py database.py trainer.py /app/
 
-# Run as a non-root user
-RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
+# data/ is a named Docker volume — create mount point before switching user
+RUN mkdir -p /app/data
+
+# Drop root: run as a non-privileged system user
+RUN addgroup --system appgroup \
+    && adduser --system --ingroup appgroup appuser \
+    && usermod -a -G video,render appuser 2>/dev/null || true
 RUN chown -R appuser:appgroup /app
 USER appuser
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
 CMD ["uvicorn", "fastapi_backend:app", "--host", "0.0.0.0", "--port", "8000"]
